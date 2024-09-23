@@ -20,12 +20,18 @@ app.use((req, res, next) => {
     next();
 });
 
+const colors = [
+    '#E38627', '#C13C37', '#6A2135', '#8E44AD', '#2980B9', '#1ABC9C', '#2ECC71', '#F39C12', '#D35400', '#E74C3C',
+    '#3498DB', '#9B59B6', '#27AE60', '#F1C40F', '#E67E22', '#34495E', '#7F8C8D', '#16A085', '#BDC3C7', '#2C3E50'
+];
+
 // Define a Mongoose schema and model for storing webhook data
 const webhookSchema = new mongoose.Schema({
     sender: { type: String, required: true },
     subject: { type: String, required: true },
-    text: { type: String, required: true },
-    html: { type: String, required: true },
+    text: { type: String, required: false, default: "" },
+    html: { type: String, required: false, default: "" },
+    category: { type: String, required: false, default: "other" },
     date: { type: Date, default: Date.now }
 });
 
@@ -39,34 +45,35 @@ app.post('/webhook', upload.none(), async (req, res) => {
     try {
         //find category
         let category = "other";
+        const subject = req.body.subject.toLowerCase();
 
-        if(req.body.subject.includes("order")) {
+        if(subject.includes("order")) {
             category = "order";
-        } else if(req.body.subject.includes("payment")) {
+        } else if(subject.includes("payment")) {
             category = "payment";
-        } else if(req.body.subject.includes("delivery")) {
+        } else if(subject.includes("delivery")) {
             category = "delivery";
-        } else if(req.body.subject.includes("refund")) {
+        } else if(subject.includes("refund")) {
             category = "refund";
-        } else if(req.body.subject.includes("billing")) {
+        } else if(subject.includes("billing")) {
             category = "billing";
-        } else if(req.body.subject.includes("rfq")) {
+        } else if(subject.includes("rfq")) {
             category = "rfq";
-        } else if(req.body.subject.includes("quote")) {
+        } else if(subject.includes("quote")) {
             category = "quote";
-        } else if(req.body.subject.includes("invoice")) {
+        } else if(subject.includes("invoice")) {
             category = "invoice";
-        } else if(req.body.subject.includes("shipment")) {
+        } else if(subject.includes("shipment")) {
             category = "shipment";
-        } else if(req.body.subject.includes("enquiry")) {
+        } else if(subject.includes("enquiry")) {
             category = "enquiry";
-        } else if(req.body.subject.includes("enquiries")) {
+        } else if(subject.includes("enquiries")) {
             category = "enquiry";
-        } else if(req.body.subject.includes("purchase order")) {
+        } else if(subject.includes("purchase order")) {
             category = "po";
-        } else if(req.body.subject.includes("contract")) {
+        } else if(subject.includes("contract")) {
             category = "po";
-        } else if(req.body.subject.includes("negotiation")) {
+        } else if(subject.includes("negotiation")) {
             category = "negotiation";
         }
 
@@ -134,16 +141,49 @@ app.get('/view/:id', async (req, res) => {
 //add an endpoint to find the statistics from last visit
 app.get('/stats', async (req, res) => {
     try {
-        //Fetch the statistics from last visit
-        const lastVisit = req.query.lastVisit;
-        const stats = await Webhook.find({ date: { $gt: lastVisit } });
+        // Retrieve lastVisit from the query parameter (expecting Unix epoch timestamp in seconds)
+        const lastVisitParam = req.query.lastVisit;
 
-        res.status(200).json({
-            stats
+        // Validate that lastVisit is a valid 10-digit Unix epoch timestamp (numeric)
+        const lastVisitEpoch = parseInt(lastVisitParam, 10);
+        if (isNaN(lastVisitEpoch) || lastVisitEpoch <= 0) {
+            return res.status(400).json({ error: "Invalid or missing lastVisit parameter" });
+        }
+
+        // Convert Unix epoch timestamp (seconds) to Date object by multiplying by 1000 (milliseconds)
+        const lastVisit = new Date(lastVisitEpoch * 1000);
+
+        // Step 1: Get total count of webhooks filtered by `lastVisit`
+        const totalCount = await Webhook.countDocuments({ date: { $gt: lastVisit } });
+
+        // Step 2: Get category-wise counts
+        const categoryCounts = await Webhook.aggregate([
+            {
+                $match: { date: { $gt: lastVisit } } // Filter by `date` greater than `lastVisit`
+            },
+            {
+                $group: {
+                    _id: "$category",
+                    count: { $sum: 1 }
+                }
+            }
+        ]);
+
+        // Step 3: Prepare category data in the desired format
+        const categoryData = categoryCounts.map((item, index) => ({
+            title: item._id,
+            value: item.count,
+            color: colors[index % colors.length] // Dynamically assign colors from the array, loop if needed
+        }));
+
+        // Step 4: Return the result in the required format
+        res.json({
+            total: totalCount,
+            categoryData: categoryData
         });
     } catch (error) {
-        console.error('Error fetching webhook data:', error);
-        res.status(500).send('Error fetching webhook data');
+        console.error("Error fetching webhook counts:", error);
+        res.status(500).json({ error: "Internal server error" });
     }
 });
 
